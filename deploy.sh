@@ -3,7 +3,7 @@
 set -e
 
 if [ ! -f ".env" ]; then
-    echo "[错误] 找不到 .env 文件！"
+    echo "[ERROR] .env file not found!"
     exit 1
 fi
 
@@ -14,49 +14,49 @@ set +a
 
 # [优化 1]：多系统包管理器兼容，自动检测并安装 envsubst
 if ! command -v envsubst >/dev/null 2>&1; then
-    echo "[*] 正在安装 envsubst 工具..."
+    echo "[*] Installing envsubst tool..."
     if command -v apt-get >/dev/null 2>&1; then
         apt-get update && apt-get install -y gettext-base
     elif command -v yum >/dev/null 2>&1; then
         yum install -y gettext
     else
-        echo "[错误] 无法识别的包管理器，请手动安装含有 envsubst 的 gettext 包。"
+        echo "[ERROR] Unsupported package manager. Please install the gettext package (providing envsubst) manually."
         exit 1
     fi
 fi
 
-echo "[*] 创建 Nginx 配置与证书目录..."
+echo "[*] Creating Nginx config and SSL directories..."
 mkdir -p /etc/nginx/stream.d
 mkdir -p /etc/nginx/conf.d
 mkdir -p /etc/nginx/ssl
 
-echo "[*] 正在基于环境变量渲染 Nginx 配置文件..."
+echo "[*] Rendering Nginx config files from environment variables..."
 # 严格限制 envsubst 只替换这三个变量，防止误伤 Nginx 原生变量 (如 $host, $remote_addr)
 envsubst '${DOMAIN_MAIN} ${DOMAIN_HOME_TARGET} ${PANEL_REAL_PORT}' < sni.conf.template > /etc/nginx/stream.d/sni.conf
 envsubst '${DOMAIN_MAIN} ${PANEL_REAL_PORT}' < panel.conf.template > /etc/nginx/conf.d/panel.conf
 
 if [ ! -d "$HOME/.acme.sh" ]; then
-    echo "[*] 正在安装 acme.sh..."
+    echo "[*] Installing acme.sh..."
     curl https://get.acme.sh | sh -s email="$ACME_EMAIL"
 fi
 source "$HOME/.acme.sh/acme.sh.env"
 
-echo "[*] 开始申请证书: ${DOMAIN_MAIN} & *.${DOMAIN_MAIN}"
+echo "[*] Requesting certificate: ${DOMAIN_MAIN} & *.${DOMAIN_MAIN}"
 # [优化 2]：增加 || true 容错处理。当证书未过期跳过时，不会触发 set -e 导致脚本中断
 ~/.acme.sh/acme.sh --issue --dns dns_cf \
     -d "${DOMAIN_MAIN}" -d "*.${DOMAIN_MAIN}" \
-    --server letsencrypt || echo "[*] 证书已存在且未过期，跳过重新申请..."
+    --server letsencrypt || echo "[*] Certificate exists and is still valid, skipping renewal..."
 
-echo "[*] 安装证书到 Nginx 目录..."
+echo "[*] Installing certificate to Nginx directory..."
 # 此处同样增加 || true 容错
 ~/.acme.sh/acme.sh --install-cert -d "${DOMAIN_MAIN}" -d "*.${DOMAIN_MAIN}" \
     --key-file       /etc/nginx/ssl/${DOMAIN_MAIN}.key  \
     --fullchain-file /etc/nginx/ssl/fullchain.cer \
-    --reloadcmd      "systemctl reload nginx" || echo "[*] 证书安装操作完成。"
+    --reloadcmd      "systemctl reload nginx" || echo "[*] Certificate installation completed."
 
 # [优化 3]：增强 Nginx stream 模块存在性检测，防止多次重复注入
 if ! grep -qE "include\s+/etc/nginx/stream.d/.*\.conf;" /etc/nginx/nginx.conf; then
-    echo "[*] 正在向 nginx.conf 注入 stream 模块..."
+    echo "[*] Injecting stream module into nginx.conf..."
     cat << 'INNER_EOF' >> /etc/nginx/nginx.conf
 
 # --- Auto injected by deploy script ---
@@ -65,10 +65,34 @@ stream {
 }
 INNER_EOF
 else
-    echo "[*] stream 模块已存在于 nginx.conf，跳过注入。"
+    echo "[*] stream module already exists in nginx.conf, skipping injection."
 fi
 
-echo "[*] 测试并重启 Nginx..."
+echo "[*] Testing and restarting Nginx..."
 nginx -t
 systemctl restart nginx
-echo "[+] 部署完成！"
+
+# [优化 4]：ufw 防火墙收口，只保留 SSH 与 443 业务入口
+if ! command -v ufw >/dev/null 2>&1; then
+    echo "[*] Installing ufw firewall..."
+    if command -v apt-get >/dev/null 2>&1; then
+        apt-get update && apt-get install -y ufw
+    elif command -v yum >/dev/null 2>&1; then
+        yum install -y ufw
+    else
+        echo "[ERROR] Unsupported package manager. Please install ufw manually."
+        exit 1
+    fi
+fi
+
+echo "[*] Configuring firewall: allowing only 22/tcp (SSH) and 443/tcp (main traffic entry)..."
+ufw --force reset
+ufw default deny incoming
+ufw default allow outgoing
+# 只留这两扇门，其他全部封死！
+ufw allow 22/tcp   # SSH，给自己留的后门
+ufw allow 443/tcp  # 所有的业务流量总入口
+ufw --force enable
+ufw status verbose
+
+echo "[+] Deployment complete!"
