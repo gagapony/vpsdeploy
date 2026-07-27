@@ -5,6 +5,13 @@ map $ssl_preread_server_name $backend_name {
     default                        reject_hole;
 }
 
+
+log_format stream_debug '[$time_local] client=$remote_addr '
+                     'protocol=$protocol status=$status '
+                     'bytes_sent=$bytes_sent bytes_received=$bytes_received '
+                     'session_time=$session_time sni=$ssl_preread_server_name'
+                     'upstream=$upstream_addr';
+
 upstream home_server { server ${DOMAIN_HOME_TARGET}; }
 upstream local_panel { server 127.0.0.1:58924; }
 upstream xui_node    { server 127.0.0.1:8443; }
@@ -15,4 +22,5 @@ server {
     listen [::]:443;
     ssl_preread on;
     proxy_pass $backend_name;
+    access_log /var/log/nginx/stream-debug.log stream_debug;
 }
