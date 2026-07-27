@@ -1,0 +1,18 @@
+map $ssl_preread_server_name $backend_name {
+    ~*^panel.*\.${DOMAIN_MAIN}$    local_panel;
+    ~*\.${DOMAIN_MAIN}$            home_server;
+    ~*(amd|radeon|gpuopen)\.com$   xui_node;
+    default                        reject_hole;
+}
+
+upstream home_server { server ${DOMAIN_HOME_TARGET}; }
+upstream local_panel { server 127.0.0.1:58924; }
+upstream xui_node    { server 127.0.0.1:8443; }
+upstream reject_hole { server 127.0.0.1:9; }
+
+server {
+    listen 443;
+    listen [::]:443;
+    ssl_preread on;
+    proxy_pass $backend_name;
+}
