@@ -1,5 +1,5 @@
 server {
-    listen 127.0.0.1:58924 ssl;
+    listen 127.0.0.1:58925 ssl;
     server_name ~^panel.*\.${DOMAIN_MAIN}$;
 
     ssl_certificate       /etc/nginx/ssl/fullchain.cer;

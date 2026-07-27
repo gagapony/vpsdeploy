@@ -13,7 +13,7 @@ log_format stream_debug '[$time_local] client=$remote_addr '
                      'upstream=$upstream_addr';
 
 upstream home_server { server ${DOMAIN_HOME_TARGET}; }
-upstream local_panel { server 127.0.0.1:58924; }
+upstream local_panel { server 127.0.0.1:58925; }
 upstream xui_node    { server 127.0.0.1:8443; }
 upstream reject_hole { server 127.0.0.1:9; }
 
