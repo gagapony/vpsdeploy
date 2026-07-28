@@ -46,41 +46,52 @@ fi
 echo "=== Starting Server Initialization (${PRETTY_NAME:-$OS_ID}) ==="
 
 # --------------------------------------------------
-# 1. Configure 2GB Swap Space
+# 1. Configure Swap Space (1/10 of disk, max 2GB)
 # --------------------------------------------------
-echo -e "\n>>> [1/4] Configuring 2GB Swap space..."
+echo -e "\n>>> [1/4] Configuring Swap space (1/10 of disk, max 2GB)..."
 if swapon --show | grep -q "^/swapfile"; then
     echo "[OK] Swap file already exists. Skipping creation."
 else
-    # 检查磁盘剩余空间（至少预留 2.5GB）
-    avail_mb=$(df -m --output=avail / | tail -n 1 | tr -d ' ')
-    if [ "${avail_mb:-0}" -lt 2560 ]; then
-        echo "[ERROR] Not enough disk space for a 2GB swapfile (available: ${avail_mb}MB)."
-        exit 1
+    # Swap 大小 = 根分区总容量的 1/10，上限 2048MB
+    total_mb=$(df -m --output=size / | tail -n 1 | tr -d ' ')
+    swap_mb=$(( ${total_mb:-0} / 10 ))
+    if [ "$swap_mb" -gt 2048 ]; then
+        swap_mb=2048
     fi
 
-    # fallocate 优先（快）；部分文件系统上 fallocate 的 swap 无法启用，则回退 dd
-    swap_ok=0
-    if fallocate -l 2G /swapfile 2>/dev/null; then
-        chmod 600 /swapfile
-        if mkswap /swapfile >/dev/null 2>&1 && swapon /swapfile 2>/dev/null; then
-            swap_ok=1
-        else
-            rm -f /swapfile
+    if [ "$swap_mb" -lt 128 ]; then
+        echo "[WARN] Disk too small (${total_mb:-unknown}MB total, calculated swap ${swap_mb}MB < 128MB). Skipping swap creation."
+    else
+        # 检查磁盘剩余空间（swap 大小 + 512MB 余量）
+        avail_mb=$(df -m --output=avail / | tail -n 1 | tr -d ' ')
+        if [ "${avail_mb:-0}" -lt $(( swap_mb + 512 )) ]; then
+            echo "[ERROR] Not enough disk space for a ${swap_mb}MB swapfile (available: ${avail_mb}MB)."
+            exit 1
         fi
-    fi
-    if [ "$swap_ok" -eq 0 ]; then
-        dd if=/dev/zero of=/swapfile bs=1M count=2048 status=progress
-        chmod 600 /swapfile
-        mkswap /swapfile
-        swapon /swapfile
-    fi
 
-    # Add to fstab for persistent mount on reboot, preventing duplicate entries
-    if ! grep -q "^/swapfile" /etc/fstab; then
-        echo '/swapfile none swap sw 0 0' >> /etc/fstab
+        # fallocate 优先（快）；部分文件系统上 fallocate 的 swap 无法启用，则回退 dd
+        swap_ok=0
+        if fallocate -l "${swap_mb}M" /swapfile 2>/dev/null; then
+            chmod 600 /swapfile
+            if mkswap /swapfile >/dev/null 2>&1 && swapon /swapfile 2>/dev/null; then
+                swap_ok=1
+            else
+                rm -f /swapfile
+            fi
+        fi
+        if [ "$swap_ok" -eq 0 ]; then
+            dd if=/dev/zero of=/swapfile bs=1M count="$swap_mb" status=progress
+            chmod 600 /swapfile
+            mkswap /swapfile
+            swapon /swapfile
+        fi
+
+        # Add to fstab for persistent mount on reboot, preventing duplicate entries
+        if ! grep -q "^/swapfile" /etc/fstab; then
+            echo '/swapfile none swap sw 0 0' >> /etc/fstab
+        fi
+        echo "[OK] Swap configuration completed successfully (${swap_mb}MB)."
     fi
-    echo "[OK] Swap configuration completed successfully."
 fi
 
 # --------------------------------------------------
