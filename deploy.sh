@@ -75,14 +75,8 @@ systemctl restart nginx
 # [优化 4]：ufw 防火墙收口，只保留 SSH 与 443 业务入口
 if ! command -v ufw >/dev/null 2>&1; then
     echo "[*] Installing ufw firewall..."
-    if command -v apt-get >/dev/null 2>&1; then
-        apt-get update && apt-get install -y ufw
-    elif command -v yum >/dev/null 2>&1; then
-        yum install -y ufw
-    else
-        echo "[ERROR] Unsupported package manager. Please install ufw manually."
-        exit 1
-    fi
+    apt-get update && apt-get install -y ufw
+    echo "[*] Installed ufw firewall"
 fi
 
 echo "[*] Configuring firewall: allowing only 22/tcp (SSH) and 443/tcp (main traffic entry)..."
