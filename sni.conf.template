@@ -1,8 +1,7 @@
 map $ssl_preread_server_name $backend_name {
     ~*^panel.*\.${DOMAIN_MAIN}$    local_panel;
     ~*\.${DOMAIN_MAIN}$            home_server;
-    ~*\.icloud\.com$               xui_node;
-    default                        reject_hole;
+    default                        xui_node;
 }
 
 
