@@ -1,6 +1,9 @@
+resolver ${NGINX_RESOLVER} valid=60s ipv6=off;
+resolver_timeout 5s;
+
 map $ssl_preread_server_name $backend_name {
     ~*^panel.*\.${DOMAIN_MAIN}$    local_panel;
-    ~*\.${DOMAIN_MAIN}$            home_server;
+    ~*\.${DOMAIN_MAIN}$            ${DOMAIN_HOME_TARGET};
     default                        xui_node;
 }
 
@@ -11,7 +14,6 @@ log_format stream_debug '[$time_local] client=$remote_addr '
                      'session_time=$session_time sni=$ssl_preread_server_name'
                      'upstream=$upstream_addr';
 
-upstream home_server { server ${DOMAIN_HOME_TARGET}; }
 upstream local_panel { server 127.0.0.1:58925; }
 upstream xui_node    { server 127.0.0.1:8443; }
 upstream reject_hole { server 127.0.0.1:9; }

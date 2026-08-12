@@ -29,10 +29,10 @@ if [ ! -f ".env" ]; then
     exit 1
 fi
 
-# 模板文件检查
-for tpl in sni.conf.template panel.conf.template; do
-    if [ ! -f "$tpl" ]; then
-        echo "[ERROR] Template file not found: $tpl (run this script from the project directory)"
+# 部署文件检查
+for required_file in sni.conf.template panel.conf.template scripts/detect_nginx_resolvers.sh; do
+    if [ ! -f "$required_file" ]; then
+        echo "[ERROR] Required file not found: $required_file (run this script from the project directory)"
         exit 1
     fi
 done
@@ -107,9 +107,17 @@ systemctl enable nginx >/dev/null 2>&1 || true
 echo "[*] Creating Nginx config and SSL directories..."
 mkdir -p /etc/nginx/stream.d /etc/nginx/conf.d /etc/nginx/ssl
 
+# Variable-based stream proxy targets need an explicit resolver. Use the host's
+# active resolver so DDNS changes are picked up without reloading Nginx.
+if ! NGINX_RESOLVER=$(bash scripts/detect_nginx_resolvers.sh /etc/resolv.conf); then
+    echo "[ERROR] No nameserver found in /etc/resolv.conf; cannot configure runtime DNS resolution."
+    exit 1
+fi
+export NGINX_RESOLVER
+
 echo "[*] Rendering Nginx config files from environment variables..."
 # 严格限制 envsubst 只替换这几个变量，防止误伤 Nginx 原生变量 (如 $host, $remote_addr)
-envsubst '${DOMAIN_MAIN} ${DOMAIN_HOME_TARGET} ${PANEL_REAL_PORT}' < sni.conf.template > /etc/nginx/stream.d/sni.conf
+envsubst '${DOMAIN_MAIN} ${DOMAIN_HOME_TARGET} ${PANEL_REAL_PORT} ${NGINX_RESOLVER}' < sni.conf.template > /etc/nginx/stream.d/sni.conf
 envsubst '${DOMAIN_MAIN} ${PANEL_REAL_PORT}' < panel.conf.template > /etc/nginx/conf.d/panel.conf
 
 # 渲染结果校验：文件必须非空
