@@ -23,6 +23,10 @@ if grep -Fq 'upstream home_server' "$rendered"; then
     echo '[FAIL] home target must not be resolved only when Nginx loads' >&2
     exit 1
 fi
+if grep -Fq 'local_panel' "$rendered" || grep -Fq 'panel.*' "$rendered"; then
+    echo '[FAIL] panel/local_panel route must not exist after panel retirement' >&2
+    exit 1
+fi
 
 grep -Fq 'proxy_pass $backend_name;' "$rendered"
-echo '[PASS] SNI template uses runtime DNS resolution for the home target'
+echo '[PASS] SNI template uses runtime DNS and has no panel route'

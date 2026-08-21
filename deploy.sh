@@ -30,7 +30,7 @@ if [ ! -f ".env" ]; then
 fi
 
 # 部署文件检查
-for required_file in sni.conf.template panel.conf.template scripts/detect_nginx_resolvers.sh; do
+for required_file in sni.conf.template scripts/detect_nginx_resolvers.sh; do
     if [ ! -f "$required_file" ]; then
         echo "[ERROR] Required file not found: $required_file (run this script from the project directory)"
         exit 1
@@ -44,7 +44,7 @@ set +a
 
 # 校验必需变量，缺失立即中止（fail fast）
 missing_vars=()
-for var in DOMAIN_MAIN DOMAIN_HOME_TARGET PANEL_REAL_PORT ACME_EMAIL CF_Token; do
+for var in DOMAIN_MAIN DOMAIN_HOME_TARGET; do
     if [ -z "${!var:-}" ]; then
         missing_vars+=("$var")
     fi
@@ -104,8 +104,8 @@ systemctl enable nginx >/dev/null 2>&1 || true
 # --------------------------------------------------
 # 2. 渲染 Nginx 配置
 # --------------------------------------------------
-echo "[*] Creating Nginx config and SSL directories..."
-mkdir -p /etc/nginx/stream.d /etc/nginx/conf.d /etc/nginx/ssl
+echo "[*] Creating Nginx config directories..."
+mkdir -p /etc/nginx/stream.d /etc/nginx/conf.d
 
 # Variable-based stream proxy targets need an explicit resolver. Use the host's
 # active resolver so DDNS changes are picked up without reloading Nginx.
@@ -117,11 +117,11 @@ export NGINX_RESOLVER
 
 echo "[*] Rendering Nginx config files from environment variables..."
 # 严格限制 envsubst 只替换这几个变量，防止误伤 Nginx 原生变量 (如 $host, $remote_addr)
-envsubst '${DOMAIN_MAIN} ${DOMAIN_HOME_TARGET} ${PANEL_REAL_PORT} ${NGINX_RESOLVER}' < sni.conf.template > /etc/nginx/stream.d/sni.conf
-envsubst '${DOMAIN_MAIN} ${PANEL_REAL_PORT}' < panel.conf.template > /etc/nginx/conf.d/panel.conf
+envsubst '${DOMAIN_MAIN} ${DOMAIN_HOME_TARGET} ${NGINX_RESOLVER}' < sni.conf.template > /etc/nginx/stream.d/sni.conf
+rm -f /etc/nginx/conf.d/panel.conf
 
 # 渲染结果校验：文件必须非空
-for conf in /etc/nginx/stream.d/sni.conf /etc/nginx/conf.d/panel.conf; do
+for conf in /etc/nginx/stream.d/sni.conf; do
     if [ ! -s "$conf" ]; then
         echo "[ERROR] Rendered config is empty: $conf"
         exit 1
@@ -129,49 +129,10 @@ for conf in /etc/nginx/stream.d/sni.conf /etc/nginx/conf.d/panel.conf; do
 done
 
 # --------------------------------------------------
-# 3. SSL 证书申请与安装
+# 3. SSL 证书
 # --------------------------------------------------
-if [ ! -d "$HOME/.acme.sh" ]; then
-    echo "[*] Installing acme.sh..."
-    curl https://get.acme.sh | sh -s email="$ACME_EMAIL"
-fi
-
-if [ ! -f "$HOME/.acme.sh/acme.sh.env" ]; then
-    echo "[ERROR] acme.sh environment not found ($HOME/.acme.sh/acme.sh.env). Installation may have failed."
-    exit 1
-fi
-source "$HOME/.acme.sh/acme.sh.env"
-
-echo "[*] Requesting certificate: ${DOMAIN_MAIN} & *.${DOMAIN_MAIN}"
-# 按退出码区分结果：0=签发成功，2=证书未到期跳过（正常继续），其他=真实失败立即中止
-issue_rc=0
-"$HOME/.acme.sh/acme.sh" --issue --dns dns_cf \
-    -d "${DOMAIN_MAIN}" -d "*.${DOMAIN_MAIN}" \
-    --server letsencrypt || issue_rc=$?
-
-if [ "$issue_rc" -eq 2 ]; then
-    echo "[*] Certificate exists and is still valid, skipping renewal."
-elif [ "$issue_rc" -ne 0 ]; then
-    echo "[ERROR] Certificate issuance failed (exit code: $issue_rc). Aborting deployment."
-    exit 1
-fi
-
-echo "[*] Installing certificate to Nginx directory..."
-if ! "$HOME/.acme.sh/acme.sh" --install-cert -d "${DOMAIN_MAIN}" \
-    --key-file       "/etc/nginx/ssl/${DOMAIN_MAIN}.key" \
-    --fullchain-file /etc/nginx/ssl/fullchain.cer \
-    --reloadcmd      "systemctl reload nginx"; then
-    echo "[ERROR] Failed to install certificate. Aborting deployment."
-    exit 1
-fi
-
-# 校验证书文件真实落盘且非空，避免 nginx 拿着空证书启动
-for f in "/etc/nginx/ssl/${DOMAIN_MAIN}.key" /etc/nginx/ssl/fullchain.cer; do
-    if [ ! -s "$f" ]; then
-        echo "[ERROR] Certificate file missing or empty: $f"
-        exit 1
-    fi
-done
+# 目前 nginx 只做 stream/TCP passthrough，不在本机终结 TLS；旧 panel
+# 面板入口已移除，因此不再申请/安装本机 wildcard 证书。
 
 # --------------------------------------------------
 # 4. 注入 stream 块并重启 Nginx
