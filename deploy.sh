@@ -44,7 +44,7 @@ set +a
 
 # 校验必需变量，缺失立即中止（fail fast）
 missing_vars=()
-for var in DOMAIN_MAIN DOMAIN_HOME_TARGET; do
+for var in DOMAIN_MAIN DOMAIN_HOME_TARGET ACME_EMAIL CF_Token; do
     if [ -z "${!var:-}" ]; then
         missing_vars+=("$var")
     fi
@@ -104,8 +104,8 @@ systemctl enable nginx >/dev/null 2>&1 || true
 # --------------------------------------------------
 # 2. 渲染 Nginx 配置
 # --------------------------------------------------
-echo "[*] Creating Nginx config directories..."
-mkdir -p /etc/nginx/stream.d /etc/nginx/conf.d
+echo "[*] Creating Nginx config and SSL directories..."
+mkdir -p /etc/nginx/stream.d /etc/nginx/conf.d /etc/nginx/ssl
 
 # Variable-based stream proxy targets need an explicit resolver. Use the host's
 # active resolver so DDNS changes are picked up without reloading Nginx.
@@ -129,10 +129,49 @@ for conf in /etc/nginx/stream.d/sni.conf; do
 done
 
 # --------------------------------------------------
-# 3. SSL 证书
+# 3. SSL 证书（家服转发/TLS 场景仍需；证书未到期则复用不重签）
 # --------------------------------------------------
-# 目前 nginx 只做 stream/TCP passthrough，不在本机终结 TLS；旧 panel
-# 面板入口已移除，因此不再申请/安装本机 wildcard 证书。
+if [ ! -d "$HOME/.acme.sh" ]; then
+    echo "[*] Installing acme.sh..."
+    curl https://get.acme.sh | sh -s email="$ACME_EMAIL"
+fi
+
+if [ ! -f "$HOME/.acme.sh/acme.sh.env" ]; then
+    echo "[ERROR] acme.sh environment not found ($HOME/.acme.sh/acme.sh.env). Installation may have failed."
+    exit 1
+fi
+source "$HOME/.acme.sh/acme.sh.env"
+
+echo "[*] Requesting certificate: ${DOMAIN_MAIN} & *.${DOMAIN_MAIN}"
+# 按退出码区分结果：0=签发成功，2=证书未到期跳过（正常继续），其他=真实失败立即中止
+issue_rc=0
+"$HOME/.acme.sh/acme.sh" --issue --dns dns_cf \
+    -d "${DOMAIN_MAIN}" -d "*.${DOMAIN_MAIN}" \
+    --server letsencrypt || issue_rc=$?
+
+if [ "$issue_rc" -eq 2 ]; then
+    echo "[*] Certificate exists and is still valid, skipping renewal."
+elif [ "$issue_rc" -ne 0 ]; then
+    echo "[ERROR] Certificate issuance failed (exit code: $issue_rc). Aborting deployment."
+    exit 1
+fi
+
+echo "[*] Installing certificate to Nginx directory..."
+if ! "$HOME/.acme.sh/acme.sh" --install-cert -d "${DOMAIN_MAIN}" \
+    --key-file       "/etc/nginx/ssl/${DOMAIN_MAIN}.key" \
+    --fullchain-file /etc/nginx/ssl/fullchain.cer \
+    --reloadcmd      "systemctl reload nginx"; then
+    echo "[ERROR] Failed to install certificate. Aborting deployment."
+    exit 1
+fi
+
+# 校验证书文件真实落盘且非空，避免 nginx 拿着空证书启动
+for f in "/etc/nginx/ssl/${DOMAIN_MAIN}.key" /etc/nginx/ssl/fullchain.cer; do
+    if [ ! -s "$f" ]; then
+        echo "[ERROR] Certificate file missing or empty: $f"
+        exit 1
+    fi
+done
 
 # --------------------------------------------------
 # 4. 注入 stream 块并重启 Nginx
