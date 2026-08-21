@@ -44,7 +44,7 @@ set +a
 
 # 校验必需变量，缺失立即中止（fail fast）
 missing_vars=()
-for var in DOMAIN_MAIN DOMAIN_HOME_TARGET ACME_EMAIL CF_Token; do
+for var in DOMAIN_MAIN DOMAIN_HOME_TARGET; do
     if [ -z "${!var:-}" ]; then
         missing_vars+=("$var")
     fi
@@ -129,44 +129,41 @@ for conf in /etc/nginx/stream.d/sni.conf; do
 done
 
 # --------------------------------------------------
-# 3. SSL 证书（家服转发/TLS 场景仍需；证书未到期则复用不重签）
+# 3. SSL 证书（优先直接复用旧证书；缺失时才申请）
 # --------------------------------------------------
-if [ ! -d "$HOME/.acme.sh" ]; then
-    echo "[*] Installing acme.sh..."
-    curl https://get.acme.sh | sh -s email="$ACME_EMAIL"
-fi
+cert_key="/etc/nginx/ssl/${DOMAIN_MAIN}.key"
+cert_chain="/etc/nginx/ssl/fullchain.cer"
 
-if [ ! -f "$HOME/.acme.sh/acme.sh.env" ]; then
-    echo "[ERROR] acme.sh environment not found ($HOME/.acme.sh/acme.sh.env). Installation may have failed."
-    exit 1
-fi
-source "$HOME/.acme.sh/acme.sh.env"
+if [ -s "$cert_key" ] && [ -s "$cert_chain" ]; then
+    echo "[*] Reusing existing certificate files; no issuance requested."
+else
+    for var in ACME_EMAIL CF_Token; do
+        if [ -z "${!var:-}" ]; then
+            echo "[ERROR] Existing certificate is missing and required variable is empty: $var"
+            exit 1
+        fi
+    done
 
-echo "[*] Requesting certificate: ${DOMAIN_MAIN} & *.${DOMAIN_MAIN}"
-# 按退出码区分结果：0=签发成功，2=证书未到期跳过（正常继续），其他=真实失败立即中止
-issue_rc=0
-"$HOME/.acme.sh/acme.sh" --issue --dns dns_cf \
-    -d "${DOMAIN_MAIN}" -d "*.${DOMAIN_MAIN}" \
-    --server letsencrypt || issue_rc=$?
+    if [ ! -d "$HOME/.acme.sh" ]; then
+        echo "[*] Installing acme.sh..."
+        curl https://get.acme.sh | sh -s email="$ACME_EMAIL"
+    fi
+    if [ ! -f "$HOME/.acme.sh/acme.sh.env" ]; then
+        echo "[ERROR] acme.sh environment not found ($HOME/.acme.sh/acme.sh.env)."
+        exit 1
+    fi
+    source "$HOME/.acme.sh/acme.sh.env"
 
-if [ "$issue_rc" -eq 2 ]; then
-    echo "[*] Certificate exists and is still valid, skipping renewal."
-elif [ "$issue_rc" -ne 0 ]; then
-    echo "[ERROR] Certificate issuance failed (exit code: $issue_rc). Aborting deployment."
-    exit 1
-fi
-
-echo "[*] Installing certificate to Nginx directory..."
-if ! "$HOME/.acme.sh/acme.sh" --install-cert -d "${DOMAIN_MAIN}" \
-    --key-file       "/etc/nginx/ssl/${DOMAIN_MAIN}.key" \
-    --fullchain-file /etc/nginx/ssl/fullchain.cer \
-    --reloadcmd      "systemctl reload nginx"; then
-    echo "[ERROR] Failed to install certificate. Aborting deployment."
-    exit 1
+    echo "[*] No installed certificate found; requesting ${DOMAIN_MAIN} & *.${DOMAIN_MAIN}"
+    "$HOME/.acme.sh/acme.sh" --issue --dns dns_cf \
+        -d "${DOMAIN_MAIN}" -d "*.${DOMAIN_MAIN}" --server letsencrypt
+    "$HOME/.acme.sh/acme.sh" --install-cert -d "${DOMAIN_MAIN}" \
+        --key-file "$cert_key" --fullchain-file "$cert_chain" \
+        --reloadcmd "systemctl reload nginx"
 fi
 
 # 校验证书文件真实落盘且非空，避免 nginx 拿着空证书启动
-for f in "/etc/nginx/ssl/${DOMAIN_MAIN}.key" /etc/nginx/ssl/fullchain.cer; do
+for f in "$cert_key" "$cert_chain"; do
     if [ ! -s "$f" ]; then
         echo "[ERROR] Certificate file missing or empty: $f"
         exit 1
