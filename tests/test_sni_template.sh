@@ -30,5 +30,6 @@ fi
 
 grep -Fq '~*^node-.*\.example.com$    vps_node;' "$rendered"
 grep -Fq '~*\.example.com$            home.example.net:8443;' "$rendered"
+grep -Fq 'default                        vps_node;' "$rendered"
 grep -Fq 'proxy_pass $backend_name;' "$rendered"
-echo '[PASS] SNI template: node- to local xray, rest to home, no panel'
+echo '[PASS] SNI template: node- and Reality default to local xray, rest to home, no panel'

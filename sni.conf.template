@@ -2,9 +2,9 @@ resolver ${NGINX_RESOLVER} valid=60s ipv6=off;
 resolver_timeout 5s;
 
 map $ssl_preread_server_name $backend_name {
-    ~*^node-.*\.${DOMAIN_MAIN}$    vps_node;      # VPS 代理节点(本地 xray)
-    ~*\.${DOMAIN_MAIN}$            ${DOMAIN_HOME_TARGET};   # 其余 = 家服,转发回家
-    default                        reject_hole;
+    ~*^node-.*\.${DOMAIN_MAIN}$    vps_node;      # node-* 标准TLS/探测 → 本机
+    ~*\.${DOMAIN_MAIN}$            ${DOMAIN_HOME_TARGET};   # 无node前缀 = 家服
+    default                        vps_node;      # Reality SNI 是 apple/amazon 等伪装站
 }
 
 
