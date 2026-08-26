@@ -44,10 +44,15 @@ gzip -dc "$tmp_gz" > "$tmp_bin"
 install -o root -g root -m 755 "$tmp_bin" /usr/local/bin/chisel
 /usr/local/bin/chisel --version
 
-printf '%s\n' "$CHISEL_AUTH" | install -o root -g chisel -m 640 /dev/stdin "$CHISEL_AUTH_FILE"
+auth_tmp=$(mktemp)
+env_tmp=$(mktemp)
+trap 'rm -f "$tmp_gz" "$tmp_bin" "$auth_tmp" "$env_tmp"' EXIT
+printf '%s\n' "$CHISEL_AUTH" > "$auth_tmp"
+printf 'CHISEL_PORT=%s\n' "$CHISEL_PORT" > "$env_tmp"
+install -o root -g chisel -m 640 "$auth_tmp" "$CHISEL_AUTH_FILE"
 install -o root -g chisel -m 640 "$CHISEL_CERT_SOURCE" /etc/chisel/fullchain.pem
 install -o root -g chisel -m 640 "$CHISEL_KEY_SOURCE" /etc/chisel/privkey.pem
-printf 'CHISEL_PORT=%s\n' "$CHISEL_PORT" | install -o root -g chisel -m 640 /dev/stdin /etc/chisel/server.env
+install -o root -g chisel -m 640 "$env_tmp" /etc/chisel/server.env
 install -o root -g root -m 644 templates/chisel-server.service /etc/systemd/system/chisel-server.service
 
 backup_dir="/var/backups/vpsdeploy/$(date +%Y%m%d-%H%M%S)-nginx-stream"
