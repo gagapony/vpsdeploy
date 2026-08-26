@@ -42,6 +42,10 @@ set -a
 source .env
 set +a
 
+CHISEL_TUNNEL_ENABLED="${CHISEL_TUNNEL_ENABLED:-false}"
+CHISEL_PORT="${CHISEL_PORT:-9000}"
+CHISEL_REVERSE_PORT="${CHISEL_REVERSE_PORT:-443}"
+
 # 校验必需变量，缺失立即中止（fail fast）
 missing_vars=()
 for var in DOMAIN_MAIN DOMAIN_HOME_TARGET; do
@@ -49,6 +53,9 @@ for var in DOMAIN_MAIN DOMAIN_HOME_TARGET; do
         missing_vars+=("$var")
     fi
 done
+if [ "$CHISEL_TUNNEL_ENABLED" = "true" ] && [ -z "${CHISEL_AUTH:-}" ]; then
+    missing_vars+=("CHISEL_AUTH")
+fi
 if [ ${#missing_vars[@]} -gt 0 ]; then
     echo "[ERROR] Missing required variables in .env: ${missing_vars[*]}"
     exit 1
@@ -115,18 +122,19 @@ if ! NGINX_RESOLVER=$(bash scripts/detect_nginx_resolvers.sh /etc/resolv.conf); 
 fi
 export NGINX_RESOLVER
 
-echo "[*] Rendering Nginx config files from environment variables..."
-# 严格限制 envsubst 只替换这几个变量，防止误伤 Nginx 原生变量 (如 $host, $remote_addr)
-envsubst '${DOMAIN_MAIN} ${DOMAIN_HOME_TARGET} ${NGINX_RESOLVER}' < sni.conf.template > /etc/nginx/stream.d/sni.conf
-rm -f /etc/nginx/conf.d/panel.conf
+if [ "$CHISEL_TUNNEL_ENABLED" != "true" ]; then
+    echo "[*] Rendering Nginx stream config from environment variables..."
+    # 严格限制 envsubst 只替换这几个变量，防止误伤 Nginx 原生变量 (如 $host, $remote_addr)
+    envsubst '${DOMAIN_MAIN} ${DOMAIN_HOME_TARGET} ${NGINX_RESOLVER}' < sni.conf.template > /etc/nginx/stream.d/sni.conf
+    rm -f /etc/nginx/conf.d/panel.conf
 
-# 渲染结果校验：文件必须非空
-for conf in /etc/nginx/stream.d/sni.conf; do
-    if [ ! -s "$conf" ]; then
-        echo "[ERROR] Rendered config is empty: $conf"
+    if [ ! -s /etc/nginx/stream.d/sni.conf ]; then
+        echo "[ERROR] Rendered config is empty: /etc/nginx/stream.d/sni.conf"
         exit 1
     fi
-done
+else
+    echo "[*] Tunnel mode selected; Nginx stream rendering is skipped."
+fi
 
 # --------------------------------------------------
 # 3. SSL 证书（优先直接复用旧证书；缺失时才申请）
@@ -159,7 +167,7 @@ else
         -d "${DOMAIN_MAIN}" -d "*.${DOMAIN_MAIN}" --server letsencrypt
     "$HOME/.acme.sh/acme.sh" --install-cert -d "${DOMAIN_MAIN}" \
         --key-file "$cert_key" --fullchain-file "$cert_chain" \
-        --reloadcmd "systemctl reload nginx"
+        --reloadcmd "bash $(pwd)/scripts/deploy/tunnel/reload-certificate.sh '$cert_key' '$cert_chain'"
 fi
 
 # 校验证书文件真实落盘且非空，避免 nginx 拿着空证书启动
@@ -171,41 +179,42 @@ for f in "$cert_key" "$cert_chain"; do
 done
 
 # --------------------------------------------------
-# 4. 注入 stream 块并重启 Nginx
+# 4. 普通模式注入 stream 块并重启 Nginx
 # --------------------------------------------------
-NGINX_CONF_BACKED_UP=0
-if ! grep -qE "include\s+/etc/nginx/stream.d/.*\.conf;" /etc/nginx/nginx.conf; then
-    echo "[*] Injecting stream module into nginx.conf (backup: /etc/nginx/nginx.conf.bak.deploy)..."
-    cp /etc/nginx/nginx.conf /etc/nginx/nginx.conf.bak.deploy
-    NGINX_CONF_BACKED_UP=1
-    cat << 'INNER_EOF' >> /etc/nginx/nginx.conf
+if [ "$CHISEL_TUNNEL_ENABLED" != "true" ]; then
+    NGINX_CONF_BACKED_UP=0
+    if ! grep -qE "include\s+/etc/nginx/stream.d/.*\.conf;" /etc/nginx/nginx.conf; then
+        echo "[*] Injecting stream module into nginx.conf (backup: /etc/nginx/nginx.conf.bak.deploy)..."
+        cp /etc/nginx/nginx.conf /etc/nginx/nginx.conf.bak.deploy
+        NGINX_CONF_BACKED_UP=1
+        cat << 'INNER_EOF' >> /etc/nginx/nginx.conf
 
 # --- Auto injected by deploy script ---
 stream {
     include /etc/nginx/stream.d/*.conf;
 }
 INNER_EOF
-else
-    echo "[*] stream module already exists in nginx.conf, skipping injection."
-fi
-
-echo "[*] Testing Nginx configuration..."
-if ! nginx -t; then
-    echo "[ERROR] Nginx config test failed. Nginx left untouched (old config still running)."
-    if [ "$NGINX_CONF_BACKED_UP" -eq 1 ]; then
-        cp /etc/nginx/nginx.conf.bak.deploy /etc/nginx/nginx.conf
-        echo "[*] Restored nginx.conf from backup."
+    else
+        echo "[*] stream module already exists in nginx.conf, skipping injection."
     fi
-    exit 1
-fi
 
-# 已在运行则 reload（零中断），未运行则 start
-if systemctl is-active --quiet nginx; then
-    systemctl reload nginx
-    echo "[*] Nginx reloaded."
-else
-    systemctl start nginx
-    echo "[*] Nginx started."
+    echo "[*] Testing Nginx configuration..."
+    if ! nginx -t; then
+        echo "[ERROR] Nginx config test failed. Nginx left untouched (old config still running)."
+        if [ "$NGINX_CONF_BACKED_UP" -eq 1 ]; then
+            cp /etc/nginx/nginx.conf.bak.deploy /etc/nginx/nginx.conf
+            echo "[*] Restored nginx.conf from backup."
+        fi
+        exit 1
+    fi
+
+    if systemctl is-active --quiet nginx; then
+        systemctl reload nginx
+        echo "[*] Nginx reloaded."
+    else
+        systemctl start nginx
+        echo "[*] Nginx started."
+    fi
 fi
 
 # --------------------------------------------------
@@ -226,5 +235,12 @@ ufw allow 22/tcp   # SSH，给自己留的后门
 ufw allow 443/tcp  # 所有的业务流量总入口
 ufw --force enable
 ufw status verbose
+
+if [ "$CHISEL_TUNNEL_ENABLED" = "true" ]; then
+    export CHISEL_PORT CHISEL_REVERSE_PORT
+    export CHISEL_CERT_SOURCE="$cert_chain"
+    export CHISEL_KEY_SOURCE="$cert_key"
+    bash scripts/deploy/tunnel/install.sh
+fi
 
 echo "[+] Deployment complete!"

@@ -188,3 +188,16 @@ http://192.168.7.12:16601#ext0=https://lucky.529777.xyz:8443#ext1=https://lucky.
 - **安全:** 本次排障用过的 root 密码已在对话中出现,尽快更换。
 - **仓库同步:** 现网 `sni.conf` 比仓库 `sni.conf.template` 多了 `vps-term`/`icloud`/`reject_hole`/`local_panel:8008` 等自定义,直接跑仓库 `deploy.sh` 会覆盖丢这些。需把仓库同步成现网现状后再作为可信源。
 - **备份:** 本次改动前已备份为 `/etc/nginx/stream.d/sni.conf.bak.20260814-035344`。
+# Tunnel entry mode
+
+Set `CHISEL_TUNNEL_ENABLED=true` on a relay that should expose Clover directly.
+`deploy.sh` then installs chisel v1.11.8, disables the conflicting Nginx stream
+listener, and opens the control and reverse ports. Clover connects to the
+control endpoint and requests `R:443:127.0.0.1:8443`, so public port 443 is
+owned by chisel after the client connects. The existing Xray listener on 8443
+is unaffected.
+
+The tunnel uses the same wildcard certificate managed by this repository.
+ACME renewal copies the renewed key pair into `/etc/chisel/` and restarts
+`chisel-server`. Authentication remains in `.env` and `/etc/chisel/auth`; it
+must never be committed.
