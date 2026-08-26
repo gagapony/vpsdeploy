@@ -170,13 +170,23 @@ else
         --reloadcmd "bash $(pwd)/scripts/deploy/tunnel/reload-certificate.sh '$cert_key' '$cert_chain'"
 fi
 
-# 校验证书文件真实落盘且非空，避免 nginx 拿着空证书启动
+# 校验证书文件真实落盘且非空，避免入口服务拿着空证书启动
 for f in "$cert_key" "$cert_chain"; do
     if [ ! -s "$f" ]; then
         echo "[ERROR] Certificate file missing or empty: $f"
         exit 1
     fi
 done
+
+# 复用证书时也要刷新已有 ACME 安装记录，否则旧 reloadcmd 仍会 reload nginx，
+# tunnel 模式续期后不会把新证书同步给 chisel。
+acme_home="$HOME/.acme.sh"
+acme_domain_dir="$acme_home/${DOMAIN_MAIN}_ecc"
+if [ -x "$acme_home/acme.sh" ] && [ -f "$acme_domain_dir/${DOMAIN_MAIN}.conf" ]; then
+    "$acme_home/acme.sh" --install-cert -d "$DOMAIN_MAIN" --ecc \
+        --key-file "$cert_key" --fullchain-file "$cert_chain" \
+        --reloadcmd "bash $(pwd)/scripts/deploy/tunnel/reload-certificate.sh '$cert_key' '$cert_chain'"
+fi
 
 # --------------------------------------------------
 # 4. 普通模式注入 stream 块并重启 Nginx
