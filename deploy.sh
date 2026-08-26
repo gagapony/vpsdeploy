@@ -44,7 +44,11 @@ set +a
 
 CHISEL_TUNNEL_ENABLED="${CHISEL_TUNNEL_ENABLED:-false}"
 CHISEL_PORT="${CHISEL_PORT:-9000}"
-CHISEL_REVERSE_PORT="${CHISEL_REVERSE_PORT:-443}"
+CHISEL_REVERSE_BIND="${CHISEL_REVERSE_BIND:-127.0.0.1}"
+CHISEL_REVERSE_PORT="${CHISEL_REVERSE_PORT:-9443}"
+if [ "$CHISEL_TUNNEL_ENABLED" = "true" ]; then
+    DOMAIN_HOME_TARGET="${CHISEL_REVERSE_BIND}:${CHISEL_REVERSE_PORT}"
+fi
 
 # 校验必需变量，缺失立即中止（fail fast）
 missing_vars=()
@@ -122,18 +126,14 @@ if ! NGINX_RESOLVER=$(bash scripts/detect_nginx_resolvers.sh /etc/resolv.conf); 
 fi
 export NGINX_RESOLVER
 
-if [ "$CHISEL_TUNNEL_ENABLED" != "true" ]; then
-    echo "[*] Rendering Nginx stream config from environment variables..."
-    # 严格限制 envsubst 只替换这几个变量，防止误伤 Nginx 原生变量 (如 $host, $remote_addr)
-    envsubst '${DOMAIN_MAIN} ${DOMAIN_HOME_TARGET} ${NGINX_RESOLVER}' < sni.conf.template > /etc/nginx/stream.d/sni.conf
-    rm -f /etc/nginx/conf.d/panel.conf
+echo "[*] Rendering Nginx stream config from environment variables..."
+# Tunnel mode overrides DOMAIN_HOME_TARGET with its loopback reverse listener.
+envsubst '${DOMAIN_MAIN} ${DOMAIN_HOME_TARGET} ${NGINX_RESOLVER}' < sni.conf.template > /etc/nginx/stream.d/sni.conf
+rm -f /etc/nginx/conf.d/panel.conf
 
-    if [ ! -s /etc/nginx/stream.d/sni.conf ]; then
-        echo "[ERROR] Rendered config is empty: /etc/nginx/stream.d/sni.conf"
-        exit 1
-    fi
-else
-    echo "[*] Tunnel mode selected; Nginx stream rendering is skipped."
+if [ ! -s /etc/nginx/stream.d/sni.conf ]; then
+    echo "[ERROR] Rendered config is empty: /etc/nginx/stream.d/sni.conf"
+    exit 1
 fi
 
 # --------------------------------------------------
@@ -189,42 +189,40 @@ if [ -x "$acme_home/acme.sh" ] && [ -f "$acme_domain_dir/${DOMAIN_MAIN}.conf" ];
 fi
 
 # --------------------------------------------------
-# 4. 普通模式注入 stream 块并重启 Nginx
+# 4. 注入 stream 块并重启 Nginx
 # --------------------------------------------------
-if [ "$CHISEL_TUNNEL_ENABLED" != "true" ]; then
-    NGINX_CONF_BACKED_UP=0
-    if ! grep -qE "include\s+/etc/nginx/stream.d/.*\.conf;" /etc/nginx/nginx.conf; then
-        echo "[*] Injecting stream module into nginx.conf (backup: /etc/nginx/nginx.conf.bak.deploy)..."
-        cp /etc/nginx/nginx.conf /etc/nginx/nginx.conf.bak.deploy
-        NGINX_CONF_BACKED_UP=1
-        cat << 'INNER_EOF' >> /etc/nginx/nginx.conf
+NGINX_CONF_BACKED_UP=0
+if ! grep -qE "include\s+/etc/nginx/stream.d/.*\.conf;" /etc/nginx/nginx.conf; then
+    echo "[*] Injecting stream module into nginx.conf (backup: /etc/nginx/nginx.conf.bak.deploy)..."
+    cp /etc/nginx/nginx.conf /etc/nginx/nginx.conf.bak.deploy
+    NGINX_CONF_BACKED_UP=1
+    cat << 'INNER_EOF' >> /etc/nginx/nginx.conf
 
 # --- Auto injected by deploy script ---
 stream {
     include /etc/nginx/stream.d/*.conf;
 }
 INNER_EOF
-    else
-        echo "[*] stream module already exists in nginx.conf, skipping injection."
-    fi
+else
+    echo "[*] stream module already exists in nginx.conf, skipping injection."
+fi
 
-    echo "[*] Testing Nginx configuration..."
-    if ! nginx -t; then
-        echo "[ERROR] Nginx config test failed. Nginx left untouched (old config still running)."
-        if [ "$NGINX_CONF_BACKED_UP" -eq 1 ]; then
-            cp /etc/nginx/nginx.conf.bak.deploy /etc/nginx/nginx.conf
-            echo "[*] Restored nginx.conf from backup."
-        fi
-        exit 1
+echo "[*] Testing Nginx configuration..."
+if ! nginx -t; then
+    echo "[ERROR] Nginx config test failed. Nginx left untouched (old config still running)."
+    if [ "$NGINX_CONF_BACKED_UP" -eq 1 ]; then
+        cp /etc/nginx/nginx.conf.bak.deploy /etc/nginx/nginx.conf
+        echo "[*] Restored nginx.conf from backup."
     fi
+    exit 1
+fi
 
-    if systemctl is-active --quiet nginx; then
-        systemctl reload nginx
-        echo "[*] Nginx reloaded."
-    else
-        systemctl start nginx
-        echo "[*] Nginx started."
-    fi
+if systemctl is-active --quiet nginx; then
+    systemctl reload nginx
+    echo "[*] Nginx reloaded."
+else
+    systemctl enable --now nginx
+    echo "[*] Nginx started."
 fi
 
 # --------------------------------------------------

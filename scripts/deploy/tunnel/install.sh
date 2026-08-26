@@ -55,36 +55,17 @@ install -o root -g chisel -m 640 "$CHISEL_KEY_SOURCE" /etc/chisel/privkey.pem
 install -o root -g chisel -m 640 "$env_tmp" /etc/chisel/server.env
 install -o root -g root -m 644 templates/chisel-server.service /etc/systemd/system/chisel-server.service
 
-backup_dir="/var/backups/vpsdeploy/$(date +%Y%m%d-%H%M%S)-nginx-stream"
-install -d -m 700 "$backup_dir"
-[ ! -f /etc/nginx/nginx.conf ] || cp -a /etc/nginx/nginx.conf "$backup_dir/"
-[ ! -d /etc/nginx/stream.d ] || cp -a /etc/nginx/stream.d "$backup_dir/"
-rm -f /etc/nginx/stream.d/*.conf
-systemctl disable --now nginx
-
-rollback_nginx() {
-    systemctl disable --now chisel-server 2>/dev/null || true
-    if [ -d "$backup_dir/stream.d" ]; then
-        install -d /etc/nginx/stream.d
-        cp -a "$backup_dir/stream.d/." /etc/nginx/stream.d/
-    fi
-    systemctl enable --now nginx 2>/dev/null || true
-}
-
 systemctl daemon-reload
 systemctl enable --now chisel-server
 sleep 2
 if ! systemctl is-active --quiet chisel-server; then
-    echo "[ERROR] chisel-server failed to start; restoring nginx." >&2
-    rollback_nginx
+    echo "[ERROR] chisel-server failed to start." >&2
     exit 1
 fi
 if ! ss -tln | grep -qE ":${CHISEL_PORT}[[:space:]]"; then
-    echo "[ERROR] chisel control port is not listening: $CHISEL_PORT; restoring nginx." >&2
-    rollback_nginx
+    echo "[ERROR] chisel control port is not listening: $CHISEL_PORT" >&2
     exit 1
 fi
 
 ufw allow "${CHISEL_PORT}/tcp"
-ufw allow "${CHISEL_REVERSE_PORT}/tcp"
-echo "[+] Tunnel server ready: control=${CHISEL_PORT}, reverse=${CHISEL_REVERSE_PORT}, nginx_backup=${backup_dir}"
+echo "[+] Tunnel server ready: control=${CHISEL_PORT}; reverse listener is managed by the authenticated client"

@@ -190,14 +190,20 @@ http://192.168.7.12:16601#ext0=https://lucky.529777.xyz:8443#ext1=https://lucky.
 - **备份:** 本次改动前已备份为 `/etc/nginx/stream.d/sni.conf.bak.20260814-035344`。
 # Tunnel entry mode
 
-Set `CHISEL_TUNNEL_ENABLED=true` on a relay that should expose Clover directly.
-`deploy.sh` then installs chisel v1.11.8, disables the conflicting Nginx stream
-listener, and opens the control and reverse ports. Clover connects to the
-control endpoint and requests `R:443:127.0.0.1:8443`, so public port 443 is
-owned by chisel after the client connects. The existing Xray listener on 8443
-is unaffected.
+Set `CHISEL_TUNNEL_ENABLED=true` only on the relay that runs the Clover tunnel.
+Chisel listens publicly on the TLS control port (default `9000`), while Clover
+requests a loopback-only reverse listener:
 
-The tunnel uses the same wildcard certificate managed by this repository.
-ACME renewal copies the renewed key pair into `/etc/chisel/` and restarts
-`chisel-server`. Authentication remains in `.env` and `/etc/chisel/auth`; it
-must never be committed.
+```text
+R:127.0.0.1:9443:127.0.0.1:8443
+```
+
+Nginx remains the sole public `443` owner. Its stream map sends managed home
+service SNI (`*.528777.xyz`) to `127.0.0.1:9443`; `node-*` and the default branch
+continue to local Xray on `127.0.0.1:8443`, preserving Reality camouflage SNI.
+Port `9443` is never opened in UFW.
+
+The tunnel control endpoint uses the wildcard certificate managed by this
+repository. ACME renewal copies the renewed pair into `/etc/chisel/`, restarts
+`chisel-server`, and reloads Nginx. Authentication remains in `.env` and
+`/etc/chisel/auth`; it must never be committed.
