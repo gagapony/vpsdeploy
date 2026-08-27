@@ -1,34 +1,44 @@
 #!/bin/bash
+# modules/tunnel.sh — Chisel 反向隧道服务端部署
+# 由 .env CHISEL_TUNNEL_ENABLED=true 启用；nginx 保持 443 唯一公网入口，
+# 家服 SNI 经 nginx 转发到回环反向监听（由隧道客户端建立）。
 set -euo pipefail
+
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck disable=SC1091
+. "$REPO_DIR/lib/common.sh"
+
+require_root
+require_debian_ubuntu
+load_env
+require_env DOMAIN_MAIN
 
 CHISEL_VERSION="${CHISEL_VERSION:-1.11.8}"
 CHISEL_PORT="${CHISEL_PORT:-9000}"
 CHISEL_REVERSE_PORT="${CHISEL_REVERSE_PORT:-443}"
 CHISEL_AUTH_FILE="${CHISEL_AUTH_FILE:-/etc/chisel/auth}"
-CHISEL_CERT_SOURCE="${CHISEL_CERT_SOURCE:-}"
-CHISEL_KEY_SOURCE="${CHISEL_KEY_SOURCE:-}"
+# 证书来源默认取 modules/cert.sh 的落盘路径（可覆盖）
+CHISEL_CERT_SOURCE="${CHISEL_CERT_SOURCE:-/etc/nginx/ssl/fullchain.cer}"
+CHISEL_KEY_SOURCE="${CHISEL_KEY_SOURCE:-/etc/nginx/ssl/${DOMAIN_MAIN}.key}"
 
 for var in CHISEL_AUTH CHISEL_CERT_SOURCE CHISEL_KEY_SOURCE; do
     if [ -z "${!var:-}" ]; then
-        echo "[ERROR] Missing required tunnel variable: $var" >&2
-        exit 1
+        die "Missing required tunnel variable: $var"
     fi
 done
 for source_file in "$CHISEL_CERT_SOURCE" "$CHISEL_KEY_SOURCE"; do
     if [ ! -s "$source_file" ]; then
-        echo "[ERROR] Tunnel TLS source is missing or empty: $source_file" >&2
-        exit 1
+        die "Tunnel TLS source is missing or empty: $source_file"
     fi
 done
 if [ "$CHISEL_PORT" = "$CHISEL_REVERSE_PORT" ]; then
-    echo "[ERROR] Chisel control and reverse ports must differ." >&2
-    exit 1
+    die "Chisel control and reverse ports must differ."
 fi
 
 case "$(dpkg --print-architecture)" in
     amd64) asset_arch=amd64 ;;
     arm64) asset_arch=arm64 ;;
-    *) echo "[ERROR] Unsupported architecture: $(dpkg --print-architecture)" >&2; exit 1 ;;
+    *) die "Unsupported architecture: $(dpkg --print-architecture)" ;;
 esac
 
 if ! id chisel >/dev/null 2>&1; then
@@ -59,12 +69,10 @@ systemctl daemon-reload
 systemctl enable --now chisel-server
 sleep 2
 if ! systemctl is-active --quiet chisel-server; then
-    echo "[ERROR] chisel-server failed to start." >&2
-    exit 1
+    die "chisel-server failed to start."
 fi
 if ! ss -tln | grep -qE ":${CHISEL_PORT}[[:space:]]"; then
-    echo "[ERROR] chisel control port is not listening: $CHISEL_PORT" >&2
-    exit 1
+    die "chisel control port is not listening: $CHISEL_PORT"
 fi
 
 ufw allow "${CHISEL_PORT}/tcp"

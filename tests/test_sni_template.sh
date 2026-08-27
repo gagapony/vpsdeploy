@@ -13,7 +13,7 @@ sed \
     -e "s|\${DOMAIN_MAIN}|$DOMAIN_MAIN|g" \
     -e "s|\${DOMAIN_HOME_TARGET}|$DOMAIN_HOME_TARGET|g" \
     -e "s|\${NGINX_RESOLVER}|$NGINX_RESOLVER|g" \
-    "$repo_dir/sni.conf.template" > "$rendered"
+    "$repo_dir/templates/sni.conf.template" > "$rendered"
 
 grep -Fq '~*\.example.com$            home.example.net:8443;' "$rendered"
 grep -Fq 'resolver 127.0.0.53 1.1.1.1 [2001:4860:4860::8888] valid=60s ipv6=off;' "$rendered"
@@ -21,6 +21,10 @@ grep -Fq 'resolver_timeout 5s;' "$rendered"
 
 if grep -Fq 'upstream home_server' "$rendered"; then
     echo '[FAIL] home target must not be resolved only when Nginx loads' >&2
+    exit 1
+fi
+if grep -Fq 'reject_hole' "$rendered"; then
+    echo '[FAIL] unused reject_hole upstream must not exist' >&2
     exit 1
 fi
 if grep -Fq 'local_panel' "$rendered" || grep -Fq 'panel' "$rendered"; then

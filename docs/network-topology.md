@@ -46,7 +46,7 @@
 
 | 名称 | 值 | 说明 | 置信度 |
 |---|---|---|---|
-| 当前中转 VPS | `38.47.103.54` | 固定公网,nginx + xray + x-ui | 【实测】 |
+| 当前中转 VPS | `38.47.103.54` | 固定公网,nginx + xray | 【实测】 |
 | 旧中转 VPS | `38.207.174.90` | **已下线**,勿再用 | 【实测】 |
 | 家庭公网 (DDNS) | `115.44.240.7` | 动态 IP,会变(曾为 `.75`/`.104`/`.108`) | 【实测】 |
 | 主域名 | `528777.xyz` | 服务域名,子域 `*.528777.xyz` 都指向中转 → 走**路径 A** | 【实测】 |
@@ -108,11 +108,11 @@ server {
 | 22 | sshd | 管理 |
 | 80 / 443 | nginx | 80 跳转 / 443 SNI 分流总入口 |
 | 8443 | xray | 代理节点(VLESS-Reality,借用 dest 证书,无需本机证书) |
-| 2096 / 58924 / 11111 / 62789 | x-ui 遗留 | 待迁移后清理(见 vps-maintain 迁移计划) |
+| (已关) 2096 / 58924 / 11111 / 62789 | — | x-ui 已下线移除,端口不再监听 |
 
 ### 4.3 证书 / 防火墙【实测】
 
-- 2026-08-21 起 nginx 只做 stream/TCP passthrough,VLESS-Reality 借用 dest 站点证书,**本机不再需要 wildcard 证书**;acme.sh 块已从 deploy.sh 移除。如未来加 TLS 终结类服务再恢复。
+- wildcard 证书由 `./vps-router.sh cert`(modules/cert.sh,acme.sh DNS-01)维护,目前仅供 tunnel 模式的 chisel TLS 使用;xray(VLESS-Reality)借用 dest 站点证书,nginx 纯 stream 透传,443 业务本身不需要本机证书。
 - ufw:`deny incoming`,只放行 `22/tcp`、`443/tcp`。
 - DNS 解析:systemd-resolved stub `127.0.0.53`(`/etc/resolv.conf`)。
 
@@ -186,7 +186,7 @@ http://192.168.7.12:16601#ext0=https://lucky.529777.xyz:8443#ext1=https://lucky.
 ## 8. 运维注意
 
 - **安全:** 本次排障用过的 root 密码已在对话中出现,尽快更换。
-- **仓库同步:** 现网 `sni.conf` 比仓库 `sni.conf.template` 多了 `vps-term`/`icloud`/`reject_hole`/`local_panel:8008` 等自定义,直接跑仓库 `deploy.sh` 会覆盖丢这些。需把仓库同步成现网现状后再作为可信源。
+- **仓库同步:** 现网 `sni.conf` 比仓库 `templates/sni.conf.template` 多了 `vps-term`/`icloud`/`local_panel:8008` 等自定义,直接跑仓库 `./vps-router.sh nginx` 会覆盖丢这些。需把仓库同步成现网现状后再作为可信源。
 - **备份:** 本次改动前已备份为 `/etc/nginx/stream.d/sni.conf.bak.20260814-035344`。
 # Tunnel entry mode
 
